@@ -977,6 +977,14 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeScreenshot();
       const preview = await appState.getImagePreview(screenshotPath);
+      // Cmd+H uses this invoke path. Keep the normal desktop attachment flow,
+      // and mirror a sharper 1080p-class preview to any connected phone.
+      const phonePreview = await appState.getImagePreview(screenshotPath, {
+        maxWidth: 1920,
+        maxHeight: 1080,
+        quality: 80,
+      });
+      PhoneMirrorService.getInstance().publishScreenshot(phonePreview);
       return { path: screenshotPath, preview };
     } catch (error) {
       // console.error("Error taking screenshot:", error)

@@ -354,6 +354,10 @@ import { DynamicActionBar } from './dynamic-actions/DynamicActionBar';
 import GlassEffectLayer from './ui/GlassEffectLayer';
 import { OverlayBanner, OverlayBannerButton } from './ui/OverlayBanner';
 import RollingTranscript from './ui/RollingTranscript';
+import {
+  shouldRevealScreenshotAttachment,
+  type ScreenshotAttachmentPayload,
+} from './screenshotAttachmentPolicy';
 
 // PERF: hoisted plugin arrays. ReactMarkdown receives `remarkPlugins` and
 // `rehypePlugins` as new array literals if defined inline at the call site —
@@ -4383,8 +4387,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     return () => unsubscribe();
   }, []);
 
-  const handleScreenshotAttach = (data: { path: string; preview: string }) => {
-    setIsExpanded(true);
+  const handleScreenshotAttach = (data: ScreenshotAttachmentPayload) => {
+    if (shouldRevealScreenshotAttachment(data)) {
+      setIsExpanded(true);
+    }
     setAttachedContext((prev) => {
       // Prevent duplicates and cap at 5
       if (prev.some((s) => s.path === data.path)) return prev;
@@ -6514,11 +6520,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 
   // Stable mount-only effect for screenshot listeners.
   // These MUST NOT be inside the [isExpanded] effect — when a screenshot is
-  // taken, `switchToOverlay` fires `ensure-expanded` which can flip isExpanded
-  // from false→true, triggering the [isExpanded] effect cleanup. If `screenshot-taken`
-  // arrives during that teardown gap the event is silently dropped (same issue
-  // as clarify streaming listeners below). handleScreenshotAttach only uses stable
-  // useState setters so a mount-only closure is safe here.
+  // taken, a normal screenshot path may call `switchToOverlay`/`ensure-expanded`,
+  // which can flip isExpanded from false→true and trigger the [isExpanded] effect
+  // cleanup. If `screenshot-taken` arrives during that teardown gap the event is
+  // silently dropped (same issue as clarify streaming listeners below). The silent
+  // Phone Mirror path uses `screenshot-attached` with reveal:false, so it updates
+  // context without asking the visibility effect to show the window. The handler
+  // only uses stable useState setters, so a mount-only closure is safe here.
   useEffect(() => {
     const cleanupTaken = window.electronAPI.onScreenshotTaken(handleScreenshotAttach);
     const cleanupAttached = window.electronAPI.onScreenshotAttached?.(handleScreenshotAttach);

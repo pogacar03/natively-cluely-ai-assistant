@@ -1192,7 +1192,7 @@ import { WindowHelper } from "./WindowHelper"
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "./ModelSelectorWindowHelper"
 import { CropperWindowHelper } from "./CropperWindowHelper"
-import { ScreenshotHelper } from "./ScreenshotHelper"
+import { ScreenshotHelper, type ImagePreviewOptions } from "./ScreenshotHelper"
 import { KeybindManager } from "./services/KeybindManager"
 import { ProcessingHelper } from "./ProcessingHelper"
 
@@ -1266,6 +1266,7 @@ type ScreenshotCaptureKind = 'full' | 'selective';
 interface ScreenshotCaptureSession {
   captureKind: ScreenshotCaptureKind;
   wasMainWindowVisible: boolean;
+  restoreMainWindow: boolean;
   windowMode: ScreenshotWindowMode;
   wasSettingsVisible: boolean;
   wasModelSelectorVisible: boolean;
@@ -1296,6 +1297,7 @@ try {
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
 import { PhoneMirrorService, shouldStartPhoneMirrorOnBoot } from "./services/PhoneMirrorService"
+import { shouldUsePhoneMirrorStealthMode } from "./services/phoneMirrorStealthMode"
 import { describePageCaptureFallback, describeDoubleCaptureFailure, PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL } from "./services/pageCaptureFallback"
 import { setVerboseLoggingFlag } from "./verboseLog"
 import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
@@ -1826,15 +1828,16 @@ export class AppState {
           // Adapted from public PR #113 — verify premium interaction
           this.toggleOverlayMousePassthrough();
         } else if (actionId === 'general:take-screenshot') {
-          // Route to renderer via global-shortcut so the renderer handles the
-          // screenshot through the IPC invoke path (request/response guarantee).
-          // The old pattern — main takes screenshot → fires screenshot-taken event →
-          // renderer listener catches it — was unreliable in overlay mode because the
-          // fire-and-forget event could be missed if the listener registration had any
-          // timing gap. The invoke path used by generalHandlers.takeScreenshot() is
-          // already proven to work for UI-button screenshots; reuse it here.
-          const mainWindow = this.getMainWindow();
-          this.sendToWindow(mainWindow, 'global-shortcut', { action: 'takeScreenshot' });
+          if (this.shouldUsePhoneMirrorStealthMode()) {
+            await this.captureScreenshotForPhoneMirrorStealthMode();
+          } else {
+            // Route to renderer via global-shortcut so the renderer handles the
+            // normal screenshot through the IPC invoke path (request/response
+            // guarantee). The hidden Phone Mirror path above is deliberately
+            // main-process-owned so its capture session can skip restoration.
+            const mainWindow = this.getMainWindow();
+            this.sendToWindow(mainWindow, 'global-shortcut', { action: 'takeScreenshot' });
+          }
         } else if (actionId === 'general:selective-screenshot') {
           const mainWindow = this.getMainWindow();
           this.sendToWindow(mainWindow, 'global-shortcut', { action: 'selectiveScreenshot' });
@@ -7259,14 +7262,17 @@ export class AppState {
 
   private createScreenshotCaptureSession(
     captureKind: ScreenshotCaptureKind,
-    restoreFocus: boolean
+    restoreFocus: boolean,
+    options: { preserveMainWindowVisibility?: boolean } = {},
   ): ScreenshotCaptureSession {
     const settingsWindow = this.settingsWindowHelper.getSettingsWindow();
     const modelSelectorWindow = this.modelSelectorWindowHelper.getWindow();
+    const wasMainWindowVisible = this.windowHelper.isVisible();
 
     return {
       captureKind,
-      wasMainWindowVisible: this.windowHelper.isVisible(),
+      wasMainWindowVisible,
+      restoreMainWindow: wasMainWindowVisible && !options.preserveMainWindowVisibility,
       windowMode: this.windowHelper.getCurrentWindowMode(),
       wasSettingsVisible: !!settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible(),
       wasModelSelectorVisible: !!modelSelectorWindow && !modelSelectorWindow.isDestroyed() && modelSelectorWindow.isVisible(),
@@ -7342,7 +7348,7 @@ export class AppState {
 
   private restoreWindowsAfterScreenshot(session: ScreenshotCaptureSession): void {
     const activate = !session.restoreWithoutFocus;
-    const shouldRestoreMainWindow = session.wasMainWindowVisible;
+    const shouldRestoreMainWindow = session.restoreMainWindow;
 
     if (shouldRestoreMainWindow) {
       if (session.windowMode === 'overlay') {
@@ -7388,7 +7394,8 @@ export class AppState {
   private async withScreenshotCaptureSession<T>(
     captureKind: ScreenshotCaptureKind,
     restoreFocus: boolean,
-    capture: (session: ScreenshotCaptureSession) => Promise<T>
+    capture: (session: ScreenshotCaptureSession) => Promise<T>,
+    options: { preserveMainWindowVisibility?: boolean } = {},
   ): Promise<T> {
     if (!this.getMainWindow()) {
       throw new Error("No main window available");
@@ -7398,7 +7405,7 @@ export class AppState {
       throw new Error("Screenshot capture already in progress");
     }
 
-    const session = this.createScreenshotCaptureSession(captureKind, restoreFocus);
+    const session = this.createScreenshotCaptureSession(captureKind, restoreFocus, options);
     this.screenshotCaptureInProgress = true;
 
     try {
@@ -7422,10 +7429,45 @@ export class AppState {
   }
 
   // Screenshot management methods
-  public async takeScreenshot(restoreFocus: boolean = true): Promise<string> {
-    return this.withScreenshotCaptureSession('full', restoreFocus, (session) =>
-      this.screenshotHelper.takeScreenshot(this.getTargetDisplayForFullScreenshot(session))
+  public async takeScreenshot(
+    restoreFocus: boolean = true,
+    options: { preserveMainWindowVisibility?: boolean } = {},
+  ): Promise<string> {
+    return this.withScreenshotCaptureSession(
+      'full',
+      restoreFocus,
+      (session) => this.screenshotHelper.takeScreenshot(this.getTargetDisplayForFullScreenshot(session)),
+      options,
     )
+  }
+
+  private shouldUsePhoneMirrorStealthMode(): boolean {
+    const phoneMirror = PhoneMirrorService.getInstance();
+    return shouldUsePhoneMirrorStealthMode({
+      windowMode: this.windowHelper.getCurrentWindowMode(),
+      mainWindowVisible: this.windowHelper.isVisible(),
+      overlayExpanded: this.windowHelper.isOverlayExpanded(),
+      phoneClients: phoneMirror.hasClients() ? 1 : 0,
+    });
+  }
+
+  private async captureScreenshotForPhoneMirrorStealthMode(): Promise<void> {
+    const screenshotPath = await this.takeScreenshot(false, {
+      preserveMainWindowVisibility: true,
+    });
+    const preview = await this.getImagePreview(screenshotPath);
+    const phonePreview = await this.getImagePreview(screenshotPath, {
+      maxWidth: 1920,
+      maxHeight: 1080,
+      quality: 80,
+    });
+
+    PhoneMirrorService.getInstance().publishScreenshot(phonePreview);
+    this.sendToWindow(this.getMainWindow(), 'screenshot-attached', {
+      path: screenshotPath,
+      preview,
+      reveal: false,
+    });
   }
 
   /**
@@ -7470,8 +7512,11 @@ export class AppState {
     })
   }
 
-  public async getImagePreview(filepath: string): Promise<string> {
-    return this.screenshotHelper.getImagePreview(filepath)
+  public async getImagePreview(
+    filepath: string,
+    options?: ImagePreviewOptions,
+  ): Promise<string> {
+    return this.screenshotHelper.getImagePreview(filepath, options)
   }
 
   public async deleteScreenshot(

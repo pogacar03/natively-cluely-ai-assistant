@@ -90,8 +90,8 @@ interface ElectronAPI {
   getRecognitionLanguages: () => Promise<Record<string, any>>;
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>;
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>;
-  onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => () => void;
-  onScreenshotAttached: (callback: (data: { path: string; preview: string }) => void) => () => void;
+  onScreenshotTaken: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => () => void;
+  onScreenshotAttached: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => () => void;
   onCaptureAndProcess: (callback: (data: { path: string; preview: string }) => void) => () => void;
   onSolutionsReady: (callback: (solutions: string) => void) => () => void;
   onResetView: (callback: () => void) => () => void;
@@ -1331,15 +1331,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteScreenshot: (path: string) => ipcRenderer.invoke('delete-screenshot', path),
 
   // Event listeners
-  onScreenshotTaken: (callback: (data: { path: string; preview: string }) => void) => {
-    const subscription = (_: any, data: { path: string; preview: string }) => callback(data);
+  onScreenshotTaken: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => {
+    const subscription = (_: any, data: { path: string; preview: string; reveal?: boolean }) => callback(data);
     ipcRenderer.on('screenshot-taken', subscription);
     return () => {
       ipcRenderer.removeListener('screenshot-taken', subscription);
     };
   },
-  onScreenshotAttached: (callback: (data: { path: string; preview: string }) => void) => {
-    const subscription = (_: any, data: { path: string; preview: string }) => callback(data);
+  onScreenshotAttached: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => {
+    const subscription = (_: any, data: { path: string; preview: string; reveal?: boolean }) => callback(data);
     ipcRenderer.on('screenshot-attached', subscription);
     return () => {
       ipcRenderer.removeListener('screenshot-attached', subscription);

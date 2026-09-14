@@ -133,10 +133,10 @@ export interface ElectronAPI {
     path: string
   ) => Promise<{ success: boolean; error?: string }>
   onScreenshotTaken: (
-    callback: (data: { path: string; preview: string }) => void
+    callback: (data: { path: string; preview: string; reveal?: boolean }) => void
   ) => () => void
   onScreenshotAttached: (
-    callback: (data: { path: string; preview: string }) => void
+    callback: (data: { path: string; preview: string; reveal?: boolean }) => void
   ) => () => void
   onCaptureAndProcess: (
     callback: (data: { path: string; preview: string }) => void

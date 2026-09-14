@@ -1337,6 +1337,16 @@ export class WindowHelper {
     return this.currentWindowMode;
   }
 
+  /**
+   * The overlay renderer mirrors its vertical visibility state through
+   * `overlay-ui-state`. `undefined` means the renderer has not reported yet;
+   * callers should treat that as the normal expanded state.
+   */
+  public isOverlayExpanded(): boolean | undefined {
+    const expanded = (this.lastOverlayUiState as { expanded?: unknown } | null)?.expanded;
+    return typeof expanded === 'boolean' ? expanded : undefined;
+  }
+
   // Clears the remembered overlay position so the next switchToOverlay() call
   // opens at the default centered position (called on new meeting start).
   public resetOverlayPosition(): void {

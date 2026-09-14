@@ -5,6 +5,7 @@ import type { BrowserContextSettings, PhoneMirrorInfo } from '../../types/electr
 import { isMac } from '../../utils/platformUtils';
 import { BrowserExtensionIcon } from '../onboarding/BrowserExtensionIcon';
 import { useToggleInit } from './useToggleInit';
+import { mergePhoneMirrorInfo } from './phoneMirrorInfo';
 
 const MiniPairingCountdownRing: React.FC<{ seconds: number; total: number }> = ({
   seconds,
@@ -153,20 +154,27 @@ export const PhoneMirrorSettings: React.FC = () => {
     const off = window.electronAPI.onPhoneMirrorStatus((next) => {
       if (!next || typeof next !== 'object') return;
       setInfo((prev) => {
-        const n = next as PhoneMirrorInfo;
+        const n = next as Partial<PhoneMirrorInfo>;
+        const merged = mergePhoneMirrorInfo(prev, n);
         if (
-          prev &&
-          prev.qrDataUrl === n.qrDataUrl &&
-          prev.primaryUrl === n.primaryUrl &&
-          prev.token === n.token &&
-          prev.extToken === n.extToken &&
-          prev.running === n.running &&
-          prev.clients === n.clients &&
-          prev.extensionConnected === n.extensionConnected
+          prev.running === merged.running &&
+          prev.enabled === merged.enabled &&
+          prev.exposeOnLan === merged.exposeOnLan &&
+          prev.port === merged.port &&
+          prev.loopbackUrl === merged.loopbackUrl &&
+          prev.primaryUrl === merged.primaryUrl &&
+          prev.lanUrls.length === merged.lanUrls.length &&
+          prev.lanUrls.every((url, index) => url === merged.lanUrls[index]) &&
+          prev.token === merged.token &&
+          prev.extToken === merged.extToken &&
+          prev.qrDataUrl === merged.qrDataUrl &&
+          prev.clients === merged.clients &&
+          prev.extensionConnected === merged.extensionConnected &&
+          prev.bindAddress === merged.bindAddress
         ) {
           return prev;
         }
-        return n;
+        return merged;
       });
     });
     return () => {

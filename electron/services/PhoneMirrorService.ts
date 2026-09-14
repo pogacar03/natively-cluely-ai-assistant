@@ -51,7 +51,8 @@ export type StreamEvent =
   | { type: 'done'; streamId: string; content: string; createdAt: string }
   | { type: 'error'; streamId: string; message: string }
   | { type: 'assistant'; id: string; content: string; label: string; createdAt: string }
-  | { type: 'ack'; action: string; message: string };
+  | { type: 'ack'; action: string; message: string }
+  | { type: 'screenshot'; id: string; dataUrl: string; createdAt: string };
 
 /** Command sent from the phone browser to the desktop. */
 export type PhoneCommand =
@@ -399,6 +400,22 @@ export class PhoneMirrorService {
   publishAck(action: string, message: string): void {
     if (!this.isRunning()) return;
     this.broadcast({ type: 'ack', action, message });
+  }
+
+  /**
+   * Send a freshly captured desktop screenshot to connected phones without
+   * adding the image to the mirror history. Callers pass the already-downscaled
+   * preview used by the desktop renderer, keeping the one-shot LAN payload
+   * small enough for mobile connections.
+   */
+  publishScreenshot(dataUrl: string): void {
+    if (!this.isRunning() || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(dataUrl)) return;
+    this.broadcast({
+      type: 'screenshot',
+      id: `s:${crypto.randomUUID()}`,
+      dataUrl,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   /** Returns true when at least one phone browser is connected. */
@@ -1686,6 +1703,12 @@ function isPrivateLanIPv4(ip: string): boolean {
   // RFC1918 — the only ranges a phone on the same Wi-Fi will share with the desktop.
   if (ip.startsWith('10.')) return true;
   if (ip.startsWith('192.168.')) return true;
+  // RFC6598 shared address space is also used by some campus, carrier, and
+  // managed Wi-Fi networks for devices that still share a reachable LAN.
+  if (ip.startsWith('100.')) {
+    const second = parseInt(ip.split('.')[1] || '0', 10);
+    if (second >= 64 && second <= 127) return true;
+  }
   if (ip.startsWith('172.')) {
     const second = parseInt(ip.split('.')[1] || '0', 10);
     return second >= 16 && second <= 31;

@@ -8,6 +8,12 @@ import util from "util"
 import sharp from "sharp"
 import { exec as execShell } from "child_process"
 
+export type ImagePreviewOptions = {
+  maxWidth?: number
+  maxHeight?: number
+  quality?: number
+}
+
 // Module-level: promisified shell exec created once per process lifetime.
 // Uses the shell-capable exec variant (not execFile) because Linux screenshot
 // commands use shell operators (||, 2>/dev/null) that require a shell interpreter.
@@ -844,14 +850,16 @@ export class ScreenshotHelper {
   }
 
   /**
-   * THUMBNAIL for on-screen display only (code review 2026-08-19).
+   * Encodes a bounded JPEG data URL for the renderer or Phone Mirror.
    *
    * This used to return the full-resolution PNG as a base64 data URL. A retina
    * capture is several MB, base64 adds ~33%, the overlay keeps up to 5 per
    * message, and `messages` is an uncapped, unvirtualized list whose <img>
    * elements all stay mounted — so a long session accumulated hundreds of MB of
    * data-URL strings in the crash-sensitive overlay renderer for pixels nobody
-   * views at more than a couple hundred CSS px.
+   * views at more than a couple hundred CSS px. The default profile remains a
+   * compact 480px thumbnail; callers such as Phone Mirror can request a larger
+   * bounded profile without changing the desktop renderer's payload.
    *
    * The model is NEVER fed this string: every send path passes the file PATH
    * (`currentAttachments.map(s => s.path)`), so downscaling here costs no answer
@@ -860,11 +868,15 @@ export class ScreenshotHelper {
    * back to the original full-resolution encoding rather than losing the
    * preview.
    */
-  public async getImagePreview(filepath: string): Promise<string> {
+  public async getImagePreview(
+    filepath: string,
+    options: ImagePreviewOptions = {},
+  ): Promise<string> {
     const maxRetries = 20
     const delay = 250 // 5s total wait time
-    const PREVIEW_MAX_LONG_EDGE_PX = 480
-    const PREVIEW_QUALITY = 70
+    const previewMaxWidth = options.maxWidth ?? 480
+    const previewMaxHeight = options.maxHeight ?? 480
+    const previewQuality = options.quality ?? 70
 
     for (let i = 0; i < maxRetries; i++) {
       try {
@@ -879,12 +891,12 @@ export class ScreenshotHelper {
               const thumb = await sharp(data)
                 .rotate()
                 .resize({
-                  width: PREVIEW_MAX_LONG_EDGE_PX,
-                  height: PREVIEW_MAX_LONG_EDGE_PX,
+                  width: previewMaxWidth,
+                  height: previewMaxHeight,
                   fit: 'inside',
                   withoutEnlargement: true,
                 })
-                .jpeg({ quality: PREVIEW_QUALITY })
+                .jpeg({ quality: previewQuality })
                 .toBuffer()
               return `data:image/jpeg;base64,${thumb.toString("base64")}`
             } catch (thumbErr: any) {

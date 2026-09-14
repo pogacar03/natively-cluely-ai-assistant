@@ -93,6 +93,10 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
         border-color: rgba(85,166,255,0.14);
         padding: 10px 14px;
       }
+      .screenshot-card .screenshot-image {
+        display: block; width: 100%; max-height: 70vh; object-fit: contain;
+        border-radius: 8px; background: #000;
+      }
       .meta {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
         margin-bottom: 8px; color: var(--muted); font-size: 11px;
@@ -669,6 +673,30 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
         }
 
         function buildCard(m, opts) {
+          // One-shot screenshot delivered by the desktop Cmd+H shortcut.
+          if (m.type === 'screenshot') {
+            const card = document.createElement('article');
+            card.className = 'card screenshot-card';
+            card.dataset.id = m.id || '';
+            const meta = document.createElement('div');
+            meta.className = 'meta';
+            const role = document.createElement('span');
+            role.className = 'role';
+            const pip = document.createElement('span'); pip.className = 'pip';
+            const lbl = document.createElement('span'); lbl.textContent = '🖥️ Desktop screenshot';
+            role.append(pip, lbl);
+            const right = document.createElement('span'); right.textContent = fmtTime(m.createdAt);
+            meta.append(role, right);
+            const image = document.createElement('img');
+            image.className = 'screenshot-image';
+            image.src = m.dataUrl;
+            image.alt = 'Desktop screenshot';
+            image.loading = 'lazy';
+            image.decoding = 'async';
+            card.append(meta, image);
+            return card;
+          }
+
           // Screenshot-queued notification card (no image — stays on desktop)
           if (m.type === 'screenshot-queued') {
             const card = document.createElement('article');
@@ -825,6 +853,18 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
           // Non-streaming assistant response from shortcut-triggered actions
           if (ev.type === 'assistant') {
             messages.push({ id: ev.id, role: 'assistant', content: ev.content, createdAt: ev.createdAt, label: ev.label });
+            render();
+            scrollToLatest(true);
+            return;
+          }
+          // One-shot desktop screenshot (not persisted in history).
+          if (ev.type === 'screenshot' && typeof ev.dataUrl === 'string') {
+            messages.push({
+              id: ev.id || 's:' + Date.now(),
+              type: 'screenshot',
+              dataUrl: ev.dataUrl,
+              createdAt: ev.createdAt || new Date().toISOString(),
+            });
             render();
             scrollToLatest(true);
             return;
