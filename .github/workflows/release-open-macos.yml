@@ -1,0 +1,85 @@
+name: Release public macOS build
+
+on:
+  push:
+    tags:
+      - 'v*-open'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-open-macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build public app
+        run: |
+          set -euo pipefail
+          npm run build
+          NATIVELY_CORE_SMOKE=1 npm run build:electron
+          npm run build:native
+          node scripts/ensure-sharp-mac-deps.js
+          node scripts/ensure-napi-canvas-mac-deps.js
+          npm run verify:packaged-local-assets
+          ./node_modules/.bin/electron-builder --mac --arm64 --config electron-builder.open.cjs --publish never
+
+      - name: Verify packaged public app
+        run: |
+          set -euo pipefail
+          app='release/open/mac-arm64/Natively Open.app'
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = 'com.pogacar03.natively.open'
+          codesign --verify --deep --strict --verbose=2 "$app"
+          node scripts/verify-packaged-local-assets.mjs --app "$app" --arch arm64
+          SMOKE_HOLD_SECONDS=90 node scripts/smoke-packaged-local-fallback.mjs --app "$app" --no-ollama --no-keys
+          test -n "$(find release/open -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$(find release/open -maxdepth 1 -name '*.zip' -print -quit)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: natively-open-macos-arm64
+          path: |
+            release/open/*.dmg
+            release/open/*.zip
+            release/open/latest-mac.yml
+          if-no-files-found: error
+
+      - name: Publish public Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release/open/*.dmg release/open/*.zip release/open/latest-mac.yml)
+          if [ ${#assets[@]} -lt 3 ]; then
+            echo '::error::Expected DMG, ZIP, and updater manifest.'
+            exit 1
+          fi
+          notes_file=".github/releases/${GITHUB_REF_NAME}.md"
+          test -f "$notes_file"
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title 'Natively Open 2.9.1 (macOS Apple silicon)' \
+            --notes-file "$notes_file"

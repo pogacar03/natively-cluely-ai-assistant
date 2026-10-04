@@ -325,13 +325,13 @@ export async function runLocalFallbackPreflight(options: { ollamaSelected?: bool
     // user "Please reinstall Natively" on a perfectly good install. (Dev mode
     // short-circuits checkUnpacked*, which is why it never showed up locally.)
     //
-    // The darwin branch is byte-for-byte what shipped before; only the win32
-    // branch is new. Linux gets neither (as before) rather than a guess.
+    // macOS checks the running architecture; Linux gets neither.
     if (process.platform === 'darwin') {
-      checks.push(await timedCheck('sharp darwin-arm64 native', async () => checkUnpackedNativeDir('node_modules/@img/sharp-darwin-arm64/lib')));
-      checks.push(await timedCheck('sharp darwin-x64 native', async () => checkUnpackedNativeDir('node_modules/@img/sharp-darwin-x64/lib')));
-      checks.push(await timedCheck('sqlite-vec darwin-arm64 dylib', async () => checkUnpackedNativeDir('node_modules/sqlite-vec-darwin-arm64/vec0.dylib')));
-      checks.push(await timedCheck('sqlite-vec darwin-x64 dylib', async () => checkUnpackedNativeDir('node_modules/sqlite-vec-darwin-x64/vec0.dylib')));
+      // A single-architecture package only needs binaries for its own CPU.
+      // Requiring both arches marks a healthy arm64 install as broken.
+      const arch = process.arch;
+      checks.push(await timedCheck(`sharp darwin-${arch} native`, async () => checkUnpackedNativeDir(`node_modules/@img/sharp-darwin-${arch}/lib`)));
+      checks.push(await timedCheck(`sqlite-vec darwin-${arch} dylib`, async () => checkUnpackedNativeDir(`node_modules/sqlite-vec-darwin-${arch}/vec0.dylib`)));
     } else if (process.platform === 'win32') {
       // Prefix-matched: Windows ships x64 AND ia32 installers (and arm64 is
       // possible), so the arch suffix cannot be hardcoded. Both directories are

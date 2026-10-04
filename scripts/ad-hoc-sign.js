@@ -283,6 +283,15 @@ exports.default = async function (context) {
             }
         }
     }
+
+    // Re-seal the outer bundle after changing nested native signatures.
+    // Without this, codesign --verify --deep --strict reports the .node as a
+    // modified sealed resource even though the native binary itself is signed.
+    execFileSync('codesign', [
+        '--force',
+        ...(hardenedOpt ? ['--options', 'runtime'] : []),
+        '--entitlements', entitlementsPath, '--sign', '-', appPath,
+    ], { stdio: 'inherit' });
 };
 
 // Exported for scripts/__tests__ — electron-builder only ever calls the default

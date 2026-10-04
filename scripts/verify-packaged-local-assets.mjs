@@ -116,17 +116,18 @@ const REQUIRED_UNPACKED_NATIVE_COMMON = [
   'node_modules/better-sqlite3/build/Release/better_sqlite3.node',
   'node_modules/keytar/build/Release/keytar.node',
 ];
-const REQUIRED_UNPACKED_NATIVE_DARWIN = [
+const REQUIRED_UNPACKED_NATIVE_DARWIN_COMMON = [
   'node_modules/onnxruntime-node/bin/napi-v6/darwin',
-  'node_modules/@img/sharp-darwin-arm64/lib',
-  'node_modules/@img/sharp-libvips-darwin-arm64/lib',
-  'node_modules/@img/sharp-darwin-x64/lib',
-  'node_modules/@img/sharp-libvips-darwin-x64/lib',
-  'node_modules/sqlite-vec-darwin-arm64/vec0.dylib',
-  'node_modules/sqlite-vec-darwin-x64/vec0.dylib',
-  'native-module/index.darwin-arm64.node',
-  'native-module/index.darwin-x64.node',
 ];
+function requiredDarwinNative(arch) {
+  return [
+    ...REQUIRED_UNPACKED_NATIVE_DARWIN_COMMON,
+    `node_modules/@img/sharp-darwin-${arch}/lib`,
+    `node_modules/@img/sharp-libvips-darwin-${arch}/lib`,
+    `node_modules/sqlite-vec-darwin-${arch}/vec0.dylib`,
+    `native-module/index.darwin-${arch}.node`,
+  ];
+}
 // Windows entries are UNVERIFIED against a real packaged artifact — this repo
 // has no Windows machine to build and check one from. They are derived from
 // each dependency's own published package layout (sharp 0.34.5's package.json
@@ -211,7 +212,7 @@ function resolveResourcesDir(appArg) {
   return { resources: macResources, platform: 'darwin' };
 }
 
-function verifyPackaged(appArg, platformArg) {
+function verifyPackaged(appArg, platformArg, archArg) {
   console.log('[verify-packaged-local-assets] packaged mode:', appArg);
   const { resources, platform: detectedPlatform } = resolveResourcesDir(appArg);
   if (!exists(resources)) {
@@ -240,7 +241,15 @@ function verifyPackaged(appArg, platformArg) {
   }
 
   // Native binaries & modules that must be present in the packaged app.
-  const platformNative = platform === 'darwin' ? REQUIRED_UNPACKED_NATIVE_DARWIN : REQUIRED_UNPACKED_NATIVE_WIN32;
+  const macDir = path.basename(path.dirname(path.resolve(appArg)));
+  const detectedArch = macDir === 'mac-arm64' ? 'arm64' : macDir === 'mac' ? 'x64' : process.arch;
+  const arch = archArg || detectedArch;
+  if (platform === 'darwin' && arch !== 'arm64' && arch !== 'x64') {
+    errors.push(`Could not determine macOS package architecture for ${appArg} — pass --arch arm64|x64.`);
+    return;
+  }
+  if (platform === 'darwin') console.log('[verify-packaged-local-assets] target architecture:', arch);
+  const platformNative = platform === 'darwin' ? requiredDarwinNative(arch) : REQUIRED_UNPACKED_NATIVE_WIN32;
   for (const rel of [...REQUIRED_UNPACKED_NATIVE_COMMON, ...platformNative]) {
     checkAny(unpacked, [rel], `unpacked native asset ${rel}`);
   }
@@ -259,8 +268,10 @@ function verifyPackaged(appArg, platformArg) {
 const appIdx = process.argv.indexOf('--app');
 const platformIdx = process.argv.indexOf('--platform');
 const platformArg = platformIdx !== -1 ? process.argv[platformIdx + 1] : undefined;
+const archIdx = process.argv.indexOf('--arch');
+const archArg = archIdx !== -1 ? process.argv[archIdx + 1] : undefined;
 if (appIdx !== -1 && process.argv[appIdx + 1]) {
-  verifyPackaged(process.argv[appIdx + 1], platformArg);
+  verifyPackaged(process.argv[appIdx + 1], platformArg, archArg);
 } else {
   verifySource();
 }

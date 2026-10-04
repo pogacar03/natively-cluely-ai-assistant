@@ -44,6 +44,7 @@ permissions:
 
 jobs:
   build-macos:
+    if: ${{ !endsWith(github.ref_name, '-open') }}
     runs-on: macos-14 # Apple Silicon runner; builds both arches via NATIVELY_BUILD_ALL_MAC_ARCHES
     # 90 was already tight for two ~28-min app notarizations plus two DMG
     # notarizations. scripts/lib/notary-transient.cjs now retries a DMG submit up
