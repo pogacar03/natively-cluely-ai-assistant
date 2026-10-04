@@ -1,6 +1,6 @@
 {
   "name": "natively",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "main": "dist-electron/electron/main.js",
   "engines": {
     "node": ">=22.6.0"
@@ -256,7 +256,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Natively-AI-assistant",
+        "owner": "pogacar03",
         "repo": "natively-cluely-ai-assistant",
         "releaseType": "release"
       }

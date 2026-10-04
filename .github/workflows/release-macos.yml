@@ -241,3 +241,32 @@ jobs:
             release/*.zip
             release/latest-mac.yml
           if-no-files-found: error
+
+      # A tag must produce a usable fork Release, not only an Actions artifact.
+      # This runs after signing, notarization, packaged-asset checks, and boot smoke.
+      - name: Publish fork Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release/*.dmg release/*.zip release/latest-mac.yml)
+          if [ ${#assets[@]} -lt 3 ]; then
+            echo "::error::Expected signed DMG, ZIP, and updater manifest before publishing."
+            exit 1
+          fi
+          notes_file=".github/releases/${GITHUB_REF_NAME}.md"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ -f "$notes_file" ]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file "$notes_file"
+            fi
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            notes_args=(--generate-notes)
+            if [ -f "$notes_file" ]; then notes_args=(--notes-file "$notes_file"); fi
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Natively ${GITHUB_REF_NAME#v}" "${notes_args[@]}"
+          fi
