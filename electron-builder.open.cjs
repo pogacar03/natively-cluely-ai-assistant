@@ -6,6 +6,11 @@ module.exports = {
   ...base,
   productName: 'Natively Open',
   appId: 'com.pogacar03.natively.open',
+  extraMetadata: {
+    ...(base.extraMetadata || {}),
+    name: 'natively-open',
+    productName: 'Natively Open',
+  },
   directories: { ...base.directories, output: 'release/open' },
   mac: {
     ...base.mac,

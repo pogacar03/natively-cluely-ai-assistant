@@ -355,7 +355,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // routing. Keep this a superset of the fetcher's admitted prefixes.
         if (modelId.startsWith('gpt-') || modelId.startsWith('o1-') || modelId.startsWith('o3-') || modelId.startsWith('o4-') || modelId.includes('openai')) return 'openai';
         if (modelId.startsWith('claude-')) return 'claude';
-        if (/^deepseek-v/i.test(modelId)) return 'deepseek';
+        if (/^deepseek-(?:flash|v\d)/i.test(modelId)) return 'deepseek';
         // Custom providers use arbitrary ids, so this must be an identity lookup and
         // must come last — anything matching a built-in prefix above is that
         // provider, not a custom one. Without it these classify as 'unknown' and
@@ -408,7 +408,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         if (isKnownGroqModel(modelId)) return has(cm.getGroqApiKey());
         if (modelId.startsWith('gpt-') || modelId.startsWith('o1-') || modelId.startsWith('o3-') || modelId.startsWith('o4-') || modelId.includes('openai')) return has(cm.getOpenaiApiKey());
         if (modelId.startsWith('claude-')) return has(cm.getClaudeApiKey());
-        if (/^deepseek-v/i.test(modelId)) return has(cm.getDeepseekApiKey());
+        if (/^deepseek-(?:flash|v\d)/i.test(modelId)) return has(cm.getDeepseekApiKey());
         // Intentional conservative fallback: unknown model ids may belong to saved
         // custom providers/extensions this helper cannot classify. Do not reset them
         // automatically; execution-time routing remains the source of truth.
@@ -472,7 +472,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         : modelAvailable('gpt-5.4') ? 'gpt-5.4'
         : modelAvailable('claude-sonnet-4-6') ? 'claude-sonnet-4-6'
         : modelAvailable('qwen/qwen3.6-27b') ? 'qwen/qwen3.6-27b'
-        : modelAvailable('deepseek-v4-flash') ? 'deepseek-v4-flash'
+        : modelAvailable('deepseek-flash') ? 'deepseek-flash'
         : (codexConfig.enabled === true && codexSignedIn && modelAvailable('codex-cli')) ? 'codex-cli'
         : (litellmFallbackModel && modelAvailable(litellmFallbackModel)) ? litellmFallbackModel
         : antigravityFallback ? antigravityFallback
@@ -11755,7 +11755,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           response = await axios.post(
             'https://api.deepseek.com/chat/completions',
             {
-              model: 'deepseek-v4-flash',
+              model: 'deepseek-flash',
               max_tokens: 10,
               messages: [{ role: 'user', content: 'Hello' }],
             },

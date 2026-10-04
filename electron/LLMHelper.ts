@@ -38,6 +38,7 @@ import {
   type TextStreamProvider,
 } from "./llm/textStreamFallback"
 import { isPermanentKeyError } from "./llm/providerErrorClassifier"
+import { DEEPSEEK_FLASH_MODEL, deepseekSupportsVision, isDeepseekModelId } from "./llm/deepseekModels"
 import { telemetryService } from "./services/telemetry/TelemetryService"
 import {
   ollamaVisionFromShow,
@@ -149,7 +150,7 @@ import { stripLeadingReasoningBlock } from './llm/reasoningTagFilter'
 const GROQ_VISION_MAX_IMAGES = 5
 const OPENAI_MODEL = "gpt-5.4"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
-const DEEPSEEK_MODEL = "deepseek-v4-flash"
+const DEEPSEEK_MODEL = DEEPSEEK_FLASH_MODEL
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 const NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 // Requested ceiling; see createNvidiaNimCompletion for why it is a request and
@@ -1681,8 +1682,7 @@ export class LLMHelper {
   }
 
   private isDeepseekModel(modelId: string): boolean {
-    if (!modelId) return false;
-    return /^deepseek-v\d/.test(modelId.toLowerCase());
+    return isDeepseekModelId(modelId);
   }
 
   private isLiteLLMModel(modelId: string): boolean {
@@ -3983,10 +3983,8 @@ let isMultimodal = !!(imagePaths?.length);
         return await this.generateWithClaude(cloudUserContent, claudeSystemPrompt, cloudImagePaths);
       }
       if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient) {
-        // DeepSeek is text-only; ignore image attachments here and let the
-        // fallback below pick a vision-capable provider if imagePaths are needed.
-        if (!cloudIsMultimodal) {
-          return await this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt);
+        if (!cloudIsMultimodal || deepseekSupportsVision(this.currentModelId)) {
+          return await this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt, this.currentModelId, cloudIsMultimodal ? cloudImagePaths : undefined);
         }
       }
       if (this.isLiteLLMModel(this.currentModelId) && this.litellmClient) {
@@ -4086,10 +4084,8 @@ let isMultimodal = !!(imagePaths?.length);
             providers.push({ name: routedProvider.name, execute: () => this.generateWithClaude(cloudUserContent, claudeSystemPrompt, cloudIsMultimodal ? cloudImagePaths : undefined, routedProvider.model || textClaude) });
             break;
           case 'deepseek':
-            // DeepSeek is text-only; the router already excludes it from multimodal,
-            // but this guard makes the omission explicit and safe to refactor.
-            if (!cloudIsMultimodal) {
-              providers.push({ name: routedProvider.name, execute: () => this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt, routedProvider.model || DEEPSEEK_MODEL) });
+            if (!cloudIsMultimodal || deepseekSupportsVision(routedProvider.model || DEEPSEEK_MODEL)) {
+              providers.push({ name: routedProvider.name, execute: () => this.generateWithDeepseek(cloudUserContent, openaiSystemPrompt, routedProvider.model || DEEPSEEK_MODEL, cloudIsMultimodal ? cloudImagePaths : undefined) });
             }
             break;
           case 'ollama':
@@ -4099,9 +4095,6 @@ let isMultimodal = !!(imagePaths?.length);
       }
 
       if (providers.length === 0) {
-        if (cloudIsMultimodal && this.deepseekClient) {
-          return "DeepSeek is configured for text-only requests. Add a vision-capable provider like Gemini, OpenAI, Claude, Groq, or Natively to analyze images.";
-        }
         return this.noProviderAvailableMessage();
       }
 
@@ -4771,22 +4764,22 @@ let isMultimodal = !!(imagePaths?.length);
 
   /**
    * Non-streaming DeepSeek generation via the OpenAI-compatible API.
-   * Text-only — image payloads are intentionally not sent. Image-bearing
-   * requests are routed away from DeepSeek by the fallback chain.
    */
-  private async generateWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string): Promise<string> {
+  private async generateWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, imagePaths?: string[]): Promise<string> {
     if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
     if (!this.deepseekClient) throw new Error("DeepSeek client not initialized");
-    // No imagePaths argument — DeepSeek is text-only here; let the scope guard see text payload only.
-    this.assertOutboundScopes('deepseek', userMessage);
+    this.assertOutboundScopes('deepseek', userMessage, imagePaths);
 
     await this.rateLimiters.deepseek.acquire();
 
     const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
+    if (imagePaths?.length && !deepseekSupportsVision(model)) throw new Error("The selected DeepSeek model does not support image input. Select deepseek-flash.");
 
     const messages: any[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: userMessage });
+    messages.push({ role: "user", content: imagePaths?.length
+      ? [{ type: "text", text: userMessage }, ...await this.buildOpenAiImageParts(imagePaths)]
+      : userMessage });
 
     const response = await this.withTimeout(
       this.withRetry(() => this.deepseekClient!.chat.completions.create({
@@ -5712,6 +5705,17 @@ let isMultimodal = !!(imagePaths?.length);
       ...tier2Providers,
       ...tier3Providers, // Same as tier2 — pure retry
     ];
+    if (this.deepseekClient && !this.deepseekPermanentlyDead) {
+      const dsModel = this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL;
+      if (!isMultimodal || deepseekSupportsVision(dsModel)) {
+        const deepseekAttempt = {
+          name: 'DeepSeek (' + dsModel + ')',
+          execute: () => this.generateWithDeepseek(userPrompt, systemPrompt, dsModel, isMultimodal ? imagePaths : undefined),
+        };
+        if (this.isDeepseekModel(this.currentModelId)) allProviders.unshift(deepseekAttempt);
+        else allProviders.push(deepseekAttempt);
+      }
+    }
 
     if (allProviders.length === 0 && localProviders.length === 0) {
       throw new Error("All AI providers failed: no vision-capable providers configured.");
@@ -5986,6 +5990,12 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.groqClient) {
         providers.push({ name: `Groq (${GROQ_VISION_MODEL})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt, abortSignal) });
       }
+      if (this.deepseekClient && !this.deepseekPermanentlyDead) {
+        const dsModel = this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL;
+        if (deepseekSupportsVision(dsModel)) {
+          providers.push({ name: `DeepSeek (${dsModel})`, execute: () => this.streamWithDeepseek(userContent, openaiSystemPrompt, dsModel, abortSignal, imagePaths) });
+        }
+      }
     } else {
       // TEXT-ONLY PROVIDER ORDER: [Natively] -> Codex CLI -> OpenAI -> Claude -> Gemini Flash-Lite -> Gemini Flash -> Gemini Pro -> Groq
       // Groq is demoted to LAST because the free Groq tier has a low TPM
@@ -6039,10 +6049,6 @@ let isMultimodal = !!(imagePaths?.length);
     }
 
     if (providers.length === 0) {
-      if (isMultimodal && imagePaths && this.deepseekClient) {
-        yield "DeepSeek is configured for text-only requests. Add a vision-capable provider like Gemini, OpenAI, Claude, Groq, or Natively to analyze images.";
-        return;
-      }
       yield this.noProviderAvailableMessage();
       return;
     }
@@ -6239,6 +6245,13 @@ let isMultimodal = !!(imagePaths?.length);
         cloud.push({ id: 'groq', name: `Groq (${GROQ_VISION_MODEL})`, isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
           open: (sig) => this.streamWithGroqMultimodal(userContent, imagePaths, systemPrompt, sig) });
       }
+      if (this.deepseekClient && !this.deepseekPermanentlyDead) {
+        const dsModel = this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL;
+        if (deepseekSupportsVision(dsModel)) {
+          cloud.push({ id: 'deepseek', name: `DeepSeek (${dsModel})`, isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
+            open: (sig) => this.streamWithDeepseek(userContent, systemPrompt, dsModel, sig, imagePaths) });
+        }
+      }
       if (this.hasNatively()) {
         cloud.push({ id: 'natively', name: 'Natively API', isLocal: false, priority: prio++, ttftTimeoutMs: FLASH_TTFT_MS,
           open: (sig) => this.streamWithNatively(userContent, systemPrompt, imagePaths, sig) });
@@ -6334,6 +6347,7 @@ let isMultimodal = !!(imagePaths?.length);
       if (this.useOllama) { const o = local.find(p => p.id === 'ollama'); if (o) front.push(o); }
       if (this.customProvider) { const c = local.find(p => p.id === 'custom'); if (c) front.push(c); }
       if (this.isCodexCliModel(this.currentModelId)) { const cdx = cloud.find(p => p.id === 'codex-cli'); if (cdx) front.push(cdx); }
+      if (this.isDeepseekModel(this.currentModelId)) { const ds = cloud.find(p => p.id === 'deepseek'); if (ds) front.push(ds); }
       // Same rule as Codex above: the model the user picked leads its own turn,
       // rather than being sorted behind whichever key happens to be fastest.
       if (this.isLiteLLMModel(this.currentModelId)) { const l = cloud.find(p => p.id === 'litellm'); if (l) front.push(l); }
@@ -6353,7 +6367,7 @@ let isMultimodal = !!(imagePaths?.length);
         : null;
       throw new Error(gateway
         ? `No vision-capable provider configured. The selected ${gateway} model is not available for images — check the proxy is reachable and the model is still configured, or add another vision provider in Settings.`
-        : 'No vision-capable provider configured. Add an API key (OpenAI, Claude, Gemini, or Groq) or enable a vision-capable Ollama model in Settings.');
+        : 'No vision-capable provider configured. Add an API key (DeepSeek Flash, OpenAI, Claude, Gemini, or Groq) or enable a vision-capable Ollama model in Settings.');
     }
 
     // Delegate the first-token-commit + retry + circuit-breaker state machine.
@@ -8166,18 +8180,14 @@ let isMultimodal = !!(imagePaths?.length);
       return;
     }
 
-    // DeepSeek (text-only). When images are present, fall through so the
-    // vision-first chain (Gemini/Claude/OpenAI/Natively) handles them instead.
-    if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient && !(isMultimodal && imagePaths)) {
+    if (this.isDeepseekModel(this.currentModelId) && this.deepseekClient) {
       const deepseekSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalDeepseekSystem = this.injectLanguageInstruction(deepseekSystem);
       yield* this.streamSelectedProviderWithFailover({
         id: 'deepseek', name: 'DeepSeek',
-        open: (sig) => this.streamWithDeepseek(userContent, finalDeepseekSystem, undefined, sig),
+        open: (sig) => this.streamWithDeepseek(userContent, finalDeepseekSystem, undefined, sig, isMultimodal ? imagePaths : undefined),
         userContent, finalSystemPrompt: finalDeepseekSystem, thinkingBudget, abortSignal,
-        // No `hasImages` here, unlike every other rung: the guard above already
-        // excludes image turns from this branch entirely, so it is always false.
-        // Passing it would read as the bug the other five sites exist to avoid.
+        hasImages: Boolean(isMultimodal && imagePaths?.length),
       });
       return;
     }
@@ -9225,20 +9235,23 @@ let isMultimodal = !!(imagePaths?.length);
   }
 
   /**
-   * Stream response from DeepSeek (OpenAI-compatible). Text-only by design.
+   * Stream response from DeepSeek (OpenAI-compatible).
    */
-  private async * streamWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  private async * streamWithDeepseek(userMessage: string, systemPrompt?: string, modelId?: string, abortSignal?: AbortSignal, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (this.isLocalOnlyMode) throw new Error("Cloud providers disabled in local-only mode");
     if (!this.deepseekClient) throw new Error("DeepSeek client not initialized");
-    this.assertOutboundScopes('deepseek', userMessage);
+    this.assertOutboundScopes('deepseek', userMessage, imagePaths);
 
     await this.rateLimiters.deepseek.acquire();
 
     const model = modelId || (this.isDeepseekModel(this.currentModelId) ? this.currentModelId : DEEPSEEK_MODEL);
+    if (imagePaths?.length && !deepseekSupportsVision(model)) throw new Error("The selected DeepSeek model does not support image input. Select deepseek-flash.");
 
     const messages: any[] = [];
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-    messages.push({ role: "user", content: userMessage });
+    messages.push({ role: "user", content: imagePaths?.length
+      ? [{ type: "text", text: userMessage }, ...await this.buildOpenAiImageParts(imagePaths)]
+      : userMessage });
 
     if (abortSignal?.aborted) return;
     let stream;
@@ -10986,7 +10999,7 @@ let isMultimodal = !!(imagePaths?.length);
         // fallback or a text-only retry.
         return true;
       case 'deepseek':
-        return false;
+        return deepseekSupportsVision(selection.model);
       default:
         return getModelCapabilities(selection.model, false).supportsImages;
     }
@@ -11214,7 +11227,7 @@ let isMultimodal = !!(imagePaths?.length);
         }
         return;
       case 'deepseek':
-        yield* this.streamWithDeepseek(directUserPrompt, request.systemPrompt, model, abortSignal);
+        yield* this.streamWithDeepseek(directUserPrompt, request.systemPrompt, model, abortSignal, imagePaths);
         return;
       case 'nvidia_nim':
         yield* this.streamWithNvidiaNim(directUserPrompt, request.systemPrompt, imagePaths, abortSignal, model);

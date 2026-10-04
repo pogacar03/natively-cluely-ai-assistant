@@ -244,11 +244,11 @@ export function pickLatestSnapshotPerModel<T extends { id?: string; created_at?:
 
 // ─── DeepSeek ────────────────────────────────────────────────────────────────
 
-// Documented current DeepSeek text models; used as fallback if /models call fails
+// Documented current DeepSeek models; used as fallback if /models call fails
 // or returns an unexpected shape. deepseek-chat / deepseek-reasoner are deprecated
 // (2026-07-24) and intentionally excluded.
 const DEEPSEEK_DEFAULT_MODELS: ProviderModel[] = [
-    { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
+    { id: 'deepseek-flash', label: 'deepseek-flash' },
     { id: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
 ];
 
@@ -265,13 +265,13 @@ async function fetchDeepSeekModels(apiKey: string): Promise<ProviderModel[]> {
         }
 
         const excludePatterns = [
-            'embedding', 'embed', 'vision', 'image', 'audio',
+            'embedding', 'embed', 'image', 'audio',
             'tts', 'speech', 'whisper', 'stt',
         ];
 
         const filtered = models.filter((m: any) => {
             const id = (m.id || '').toLowerCase();
-            if (!/^deepseek-v\d/.test(id)) return false;
+            if (!/^deepseek-(?:flash|v\d)/.test(id)) return false;
             if (excludePatterns.some(p => id.includes(p))) return false;
             return true;
         });

@@ -48,6 +48,7 @@ jobs:
           app='release/open/mac-arm64/Natively Open.app'
           test -d "$app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = 'com.pogacar03.natively.open'
+          node -e "const a=require('@electron/asar'); const p=JSON.parse(a.extractFile(process.argv[1], 'package.json')); if(p.name!=='natively-open'||p.productName!=='Natively Open') process.exit(1)" "$app/Contents/Resources/app.asar"
           codesign --verify --deep --strict --verbose=2 "$app"
           node scripts/verify-packaged-local-assets.mjs --app "$app" --arch arm64
           SMOKE_HOLD_SECONDS=90 node scripts/smoke-packaged-local-fallback.mjs --app "$app" --no-ollama --no-keys
@@ -81,5 +82,5 @@ jobs:
           test -f "$notes_file"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title 'Natively Open 2.9.1 (macOS Apple silicon)' \
+            --title 'Natively Open 2.9.2 (macOS Apple silicon)' \
             --notes-file "$notes_file"

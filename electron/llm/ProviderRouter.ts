@@ -1,4 +1,5 @@
 export type LLMProviderId = 'natively' | 'groq' | 'codex' | 'gemini_flash' | 'gemini_pro' | 'openai' | 'claude' | 'deepseek' | 'ollama';
+import { DEEPSEEK_FLASH_MODEL, deepseekSupportsVision } from './deepseekModels';
 export type ProviderCapability = 'chat' | 'stream_chat' | 'structured' | 'vision';
 export type ProviderAttemptStatus = 'available' | 'unavailable';
 export type ProviderUnavailableReason = 'missing_api_key' | 'missing_config' | 'unsupported_capability' | 'disabled';
@@ -294,15 +295,13 @@ export function routeLLMProviders(options: ProviderRouteOptions): ProviderAttemp
         unavailableReason: 'missing_api_key',
         supports: ['chat', 'stream_chat', 'structured', 'vision'],
     };
-    // DeepSeek (OpenAI-compatible) is intentionally text-only — no vision support
-    // declared, so it is excluded from multimodal/screenshot fallback chains.
     const deepseek: ProviderSpec = {
         provider: 'deepseek',
         name: `DeepSeek (${models.deepseek ?? 'default'})`,
         model: models.deepseek,
         available: Boolean(availability.hasDeepseek),
         unavailableReason: 'missing_api_key',
-        supports: ['chat', 'stream_chat', 'structured'],
+        supports: ['chat', 'stream_chat', 'structured', ...(deepseekSupportsVision(models.deepseek ?? DEEPSEEK_FLASH_MODEL) ? ['vision' as const] : [])],
     };
     const ollama: ProviderSpec = {
         provider: 'ollama',
@@ -313,11 +312,8 @@ export function routeLLMProviders(options: ProviderRouteOptions): ProviderAttemp
         supports: ['chat', 'stream_chat', 'structured', 'vision'],
     };
 
-    // DeepSeek is placed after Claude in the text-only chain (between the existing
-    // cloud chat providers and the local Ollama fallback) and is omitted from the
-    // multimodal chain since no DeepSeek vision model is supported.
     const orderedSpecs: ProviderSpec[] = options.multimodal
-        ? [natively, codex, openai, geminiFlash, claude, geminiPro, groq]
+        ? [natively, codex, openai, geminiFlash, claude, geminiPro, groq, deepseek]
         : [natively, groq, codex, geminiFlash, geminiPro, openai, claude, deepseek];
 
     if (availability.hasOllama) {
@@ -338,7 +334,7 @@ export function routeLLMProviders(options: ProviderRouteOptions): ProviderAttemp
         model: spec.model,
         ...statusFor(
             spec,
-            capability,
+            options.multimodal ? 'vision' : capability,
             spec.provider === 'ollama' && spec.available ? [] : deniedScopes,
             userDisabled.has(spec.provider),
         ),
@@ -601,7 +597,7 @@ export class ProviderRouter {
             'groq': 'qwen/qwen3.6-27b',
             'openai': 'gpt-5.4',
             'claude': 'claude-sonnet-4-6',
-            'deepseek': 'deepseek-v4-flash',
+            'deepseek': DEEPSEEK_FLASH_MODEL,
             'natively': 'default',
             'codex': 'default'
         };

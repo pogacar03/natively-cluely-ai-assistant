@@ -77,7 +77,7 @@ function isCloudIdentifier(id: string): boolean {
   if (s.startsWith('claude-')) return true;
   // DeepSeek cloud API (OpenAI-compatible). The local Ollama "deepseek-coder"
   // family is handled by the isOllama branch above.
-  if (/^deepseek-v\d/.test(s)) return true;
+  if (isDeepseekModelId(s)) return true;
   return false;
 }
 
@@ -114,6 +114,7 @@ function isLargeGroqModel(id: string): boolean {
 // silently re-armed the "Groq vision refused" bug).
 import { groqSupportsImages } from './groqModels';
 import { modelNameSuggestsVision } from './visionCapability';
+import { deepseekSupportsVision, isDeepseekModelId } from './deepseekModels';
 
 // Parse parameter size from an Ollama model id like "llama3.1:8b" or "qwen2.5-coder:14b".
 // Returns the size in billions of parameters, or null if not detected.
@@ -189,7 +190,7 @@ export function getModelCapabilities(modelId: string, isOllama: boolean): ModelC
     const supportsImages = lower.startsWith('gemini-') || lower.startsWith('claude-')
       || lower.startsWith('gpt-4o') || lower.startsWith('gpt-4.1') || lower.startsWith('gpt-5')
       || lower === 'natively' || lower.startsWith('natively-')
-      || gatewayVisionHint;
+      || deepseekSupportsVision(lower) || gatewayVisionHint;
     return {
       tier: 'cloud',
       maxContextTokens: b.max,

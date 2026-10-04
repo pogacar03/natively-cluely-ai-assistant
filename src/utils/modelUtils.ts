@@ -42,9 +42,9 @@ export const STANDARD_CLOUD_MODELS: Record<string, {
     },
     deepseek: {
         hasKeyCheck: (creds) => !!creds?.hasDeepseekKey,
-        ids: ['deepseek-v4-flash', 'deepseek-v4-pro'],
-        names: ['DeepSeek V4 Flash', 'DeepSeek V4 Pro'],
-        descs: ['Fast • Text-only', 'Reasoning • Text-only'],
+        ids: ['deepseek-flash', 'deepseek-v4-pro'],
+        names: ['DeepSeek V4.1 Flash', 'DeepSeek V4 Pro'],
+        descs: ['Fast • Image understanding', 'Reasoning • Text-only'],
         pmKey: 'deepseekPreferredModel'
     },
     nvidia_nim: {
