@@ -139,7 +139,7 @@ export interface ElectronAPI {
     callback: (data: { path: string; preview: string; reveal?: boolean }) => void
   ) => () => void
   onCaptureAndProcess: (
-    callback: (data: { path: string; preview: string }) => void
+    callback: (data: { path: string; preview: string; reveal?: boolean }) => void
   ) => () => void
   onSolutionsReady: (callback: (solutions: string) => void) => () => void
   onResetView: (callback: () => void) => () => void

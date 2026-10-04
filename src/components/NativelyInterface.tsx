@@ -6565,7 +6565,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     'follow_up:rephrase': 'Rephrase',
   };
 
-  const handleWhatToSay = async (promptInstruction?: string | React.MouseEvent) => {
+  const handleWhatToSay = async (promptInstruction?: string | React.MouseEvent, reveal = true) => {
     if (!tryBeginOverlayAction('what_to_say')) {
       // The press was blocked because a prior 'what_to_say' is still streaming.
       // Surface a brief hint instead of silently doing nothing, so a blocked
@@ -6578,7 +6578,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
     }
     const dynamicPromptInstruction =
       typeof promptInstruction === 'string' ? promptInstruction : undefined;
-    setIsExpanded(true);
+    if (reveal) setIsExpanded(true);
     setIsProcessing(true);
     // Capture and clear attached image context.
     // Also merge in any screenshot from the capture-and-process shortcut that
@@ -8840,7 +8840,8 @@ Provide only the answer, nothing else.`;
   useEffect(() => {
     if (!window.electronAPI.onCaptureAndProcess) return;
     const unsubscribe = window.electronAPI.onCaptureAndProcess((data) => {
-      setIsExpanded(true);
+      const reveal = shouldRevealScreenshotAttachment(data);
+      if (reveal) setIsExpanded(true);
 
       // Store screenshot in a stable ref BEFORE updating React state.
       // This fixes the React 18 concurrent mode timing race where setTimeout(0)
@@ -8853,17 +8854,18 @@ Provide only the answer, nothing else.`;
         return [...prev, data].slice(-5);
       });
 
-      // Use requestAnimationFrame so we wait for at least one paint cycle —
-      // more reliable than setTimeout(0) under React 18 concurrent scheduling.
-      // The ref guarantees handleWhatToSay has the screenshot regardless of
-      // whether the state update has flushed yet.
-      requestAnimationFrame(() => {
+      // Hidden captures must start immediately: rAF may pause while the
+      // overlay is hidden. The ref supplies the screenshot even if React has
+      // not committed the attachment state yet.
+      const runCaptureAnswer = () => {
         try {
-          handlersRef.current.handleWhatToSay();
+          handlersRef.current.handleWhatToSay(undefined, reveal);
         } finally {
           pendingCaptureRef.current = null;
         }
-      });
+      };
+      if (reveal) requestAnimationFrame(runCaptureAnswer);
+      else runCaptureAnswer();
     });
     return unsubscribe;
   }, []);

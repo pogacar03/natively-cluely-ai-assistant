@@ -92,7 +92,7 @@ interface ElectronAPI {
   deleteScreenshot: (path: string) => Promise<{ success: boolean; error?: string }>;
   onScreenshotTaken: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => () => void;
   onScreenshotAttached: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => () => void;
-  onCaptureAndProcess: (callback: (data: { path: string; preview: string }) => void) => () => void;
+  onCaptureAndProcess: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => () => void;
   onSolutionsReady: (callback: (solutions: string) => void) => () => void;
   onResetView: (callback: () => void) => () => void;
   onSolutionStart: (callback: () => void) => () => void;
@@ -1345,8 +1345,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('screenshot-attached', subscription);
     };
   },
-  onCaptureAndProcess: (callback: (data: { path: string; preview: string }) => void) => {
-    const subscription = (_: any, data: { path: string; preview: string }) => callback(data);
+  onCaptureAndProcess: (callback: (data: { path: string; preview: string; reveal?: boolean }) => void) => {
+    const subscription = (_: any, data: { path: string; preview: string; reveal?: boolean }) => callback(data);
     ipcRenderer.on('capture-and-process', subscription);
     return () => {
       ipcRenderer.removeListener('capture-and-process', subscription);

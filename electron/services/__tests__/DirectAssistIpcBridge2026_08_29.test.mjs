@@ -99,6 +99,12 @@ test('stream relay enforces correlation, monotonic deltas, and one terminal even
   assert.match(streamBlock, /controller\.signal\.aborted/);
 });
 
+test('screenshot Direct Assist relays answer tokens and completion to Phone Mirror', () => {
+  assert.match(streamBlock, /request\.source === 'screenshot'/);
+  assert.match(streamBlock, /publishToken\(request\.requestId, streamEvent\.text\)/);
+  assert.match(streamBlock, /publishDone\(request\.requestId, fullText, 'What to Answer'\)/);
+});
+
 test('provider_switch is forwarded in order without being swallowed into the terminal fall-through', () => {
   // Before this, any streamEvent.type other than 'start'/'delta' fell through
   // to `lastSequence = Math.max(...)` and then sendTerminal — so a

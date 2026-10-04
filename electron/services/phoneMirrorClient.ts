@@ -668,7 +668,7 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
 
         function scrollToLatest(force) {
           if (force || near(feed, 80)) {
-            feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
+            feed.scrollTo({ top: feed.scrollHeight, behavior: force ? 'auto' : 'smooth' });
           }
         }
 
@@ -693,6 +693,7 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
             image.alt = 'Desktop screenshot';
             image.loading = 'lazy';
             image.decoding = 'async';
+            image.addEventListener('load', () => scrollToLatest(true));
             card.append(meta, image);
             return card;
           }
@@ -760,7 +761,7 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
           feed.querySelectorAll('.card').forEach((c) => c.remove());
           for (const m of messages) feed.appendChild(buildCard(m));
           if (live) feed.appendChild(buildCard({ id: 'live:' + live.streamId, role: 'assistant', content: live.content, createdAt: live.createdAt }, { live: true }));
-          scrollToLatest();
+          scrollToLatest(true);
         }
 
         let liveRenderRaf = 0;
@@ -776,7 +777,7 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
           content.appendChild(caret);
           bindCodeCopy(content);
           empty.style.display = 'none';
-          scrollToLatest();
+          scrollToLatest(true);
         }
         function scheduleLiveRender() {
           if (liveRenderRaf) return;
@@ -794,18 +795,18 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
           scheduleLiveRender();
         }
 
-        function finalizeLive(streamId, content, createdAt) {
+        function finalizeLive(streamId, content, createdAt, label) {
           if (liveRenderRaf) {
             if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(liveRenderRaf);
             else clearTimeout(liveRenderRaf);
             liveRenderRaf = 0;
           }
           if (live && live.streamId === streamId) {
-            messages.push({ id: 'a:' + streamId, role: 'assistant', content: content || live.content, createdAt: createdAt || live.createdAt });
+            messages.push({ id: 'a:' + streamId, role: 'assistant', content: content || live.content, createdAt: createdAt || live.createdAt, label: label || undefined });
             live = null;
             render();
           } else if (content) {
-            messages.push({ id: 'a:' + streamId, role: 'assistant', content, createdAt: createdAt || new Date().toISOString() });
+            messages.push({ id: 'a:' + streamId, role: 'assistant', content, createdAt: createdAt || new Date().toISOString(), label: label || undefined });
             render();
           }
         }
@@ -838,7 +839,7 @@ export const PHONE_MIRROR_HTML = `<!doctype html>
             return;
           }
           if (ev.type === 'done') {
-            finalizeLive(String(ev.streamId), ev.content, ev.createdAt);
+            finalizeLive(String(ev.streamId), ev.content, ev.createdAt, ev.label);
             return;
           }
           if (ev.type === 'error') {

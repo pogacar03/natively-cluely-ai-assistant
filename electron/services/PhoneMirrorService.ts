@@ -1,7 +1,9 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import { app, BrowserWindow } from 'electron';
 import http from 'http';
 import os from 'os';
+import path from 'path';
 import QRCode from 'qrcode';
 import { URL } from 'url';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -48,7 +50,7 @@ export type StreamEvent =
   | { type: 'history'; messages: PersistedMessage[] }
   | { type: 'user'; id: string; content: string; createdAt: string }
   | { type: 'token'; streamId: string; token: string }
-  | { type: 'done'; streamId: string; content: string; createdAt: string }
+  | { type: 'done'; streamId: string; content: string; createdAt: string; label?: string }
   | { type: 'error'; streamId: string; message: string }
   | { type: 'assistant'; id: string; content: string; label: string; createdAt: string }
   | { type: 'ack'; action: string; message: string }
@@ -342,7 +344,7 @@ export class PhoneMirrorService {
     this.broadcast({ type: 'token', streamId, token });
   }
 
-  publishDone(streamId: string, fullContent: string): void {
+  publishDone(streamId: string, fullContent: string, label?: string): void {
     if (!this.isRunning()) return;
     const createdAt = new Date().toISOString();
     let content =
@@ -355,9 +357,15 @@ export class PhoneMirrorService {
       else content = stripLeadingNoActionSentinel(content) || content;
     } catch { /* non-fatal */ }
     if (content.trim()) {
-      const msg: PersistedMessage = { id: 'a:' + streamId, role: 'assistant', content, createdAt };
+      const msg: PersistedMessage = {
+        id: 'a:' + streamId,
+        role: 'assistant',
+        content,
+        createdAt,
+        ...(label ? { label } : {}),
+      };
       this.recordHistory(msg);
-      this.broadcast({ type: 'done', streamId, content, createdAt });
+      this.broadcast({ type: 'done', streamId, content, createdAt, ...(label ? { label } : {}) });
     }
     if (this.livePartial?.streamId === streamId) this.livePartial = null;
   }
@@ -403,10 +411,7 @@ export class PhoneMirrorService {
   }
 
   /**
-   * Send a freshly captured desktop screenshot to connected phones without
-   * adding the image to the mirror history. Callers pass the already-downscaled
-   * preview used by the desktop renderer, keeping the one-shot LAN payload
-   * small enough for mobile connections.
+   * Send a screenshot data URL to connected phones without adding it to history.
    */
   publishScreenshot(dataUrl: string): void {
     if (!this.isRunning() || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(dataUrl)) return;
@@ -416,6 +421,28 @@ export class PhoneMirrorService {
       dataUrl,
       createdAt: new Date().toISOString(),
     });
+  }
+
+  /** Send the captured PNG itself, preserving every source byte and pixel. */
+  async publishScreenshotFile(filepath: string): Promise<void> {
+    if (!this.hasClients()) return;
+    try {
+      const screenshotRoot = await fs.promises.realpath(path.join(app.getPath('userData'), 'screenshots'));
+      const canonicalFile = await fs.promises.realpath(filepath);
+      const relative = path.relative(screenshotRoot, canonicalFile);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new Error('Screenshot path is outside app screenshots');
+      }
+      const bytes = await fs.promises.readFile(canonicalFile);
+      if (!bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
+        throw new Error('Screenshot is not a PNG');
+      }
+      this.publishScreenshot(`data:image/png;base64,${bytes.toString('base64')}`);
+    } catch (error) {
+      // The phone is an optional sink; a transient file or connection error
+      // must not prevent the desktop from attaching and answering the capture.
+      console.warn('[PhoneMirror] original screenshot delivery failed:', error);
+    }
   }
 
   /** Returns true when at least one phone browser is connected. */
@@ -1478,8 +1505,12 @@ export class PhoneMirrorService {
       // Phone StreamEvents (history/token/done/chat) are for phones only — never
       // leak them to a companion extension socket.
       if (this.extClients.has(client)) continue;
-      // Backpressure guard: skip if buffered amount has run away (slow client).
-      if ((client as any).bufferedAmount > 1_000_000) continue;
+      // WebSocket preserves send order. Never silently drop answer frames after
+      // a large original PNG; close a truly stalled client so it can reconnect.
+      if (client.bufferedAmount > 256_000_000) {
+        client.terminate();
+        continue;
+      }
       try {
         client.send(payload);
       } catch (_) {

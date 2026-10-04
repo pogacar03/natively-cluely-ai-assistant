@@ -104,3 +104,48 @@ describe('#3 stream id is emitted on the wire (backward-compatible 2nd arg)', ()
       'phone onToken must include streamId');
   });
 });
+
+describe('Phone Mirror receives desktop screenshot-and-answer output', () => {
+  const ipcSrc = read('../../ipcHandlers.ts');
+  const mainSrc = read('../../main.ts');
+
+  test('V3 desktop answer tokens are forwarded to Phone Mirror', () => {
+    const streamStart = ipcSrc.indexOf('const v3Stream = llmHelper.streamChatWithOutcome(');
+    const streamEnd = ipcSrc.indexOf('// Defect G (2026-08-01)', streamStart);
+    assert.ok(streamStart >= 0 && streamEnd > streamStart, 'V3 stream block must be locatable');
+    const v3StreamBlock = ipcSrc.slice(streamStart, streamEnd);
+    assert.match(
+      v3StreamBlock,
+      /PhoneMirrorService\.getInstance\(\)\.publishToken\(String\(myStreamId\),\s*tok\)/,
+      'every V3 desktop token must be mirrored to the phone',
+    );
+    assert.match(
+      ipcSrc,
+      /PhoneMirrorService\.getInstance\(\)\.publishDone\(String\(myStreamId\),\s*finalText,\s*'Chat'\)/,
+      'the V3 desktop stream must finalize once on the phone',
+    );
+    assert.doesNotMatch(
+      v3StreamBlock,
+      /publishAssistantMessage\(String\(myStreamId\),\s*finalText/,
+      'V3 must not append a second assistant card after streaming completes',
+    );
+  });
+
+  test('capture-and-process broadcasts the original screenshot before starting the answer', () => {
+    const start = mainSrc.indexOf('private async captureScreenAndProcess()');
+    const end = mainSrc.indexOf('  /**', start + 1);
+    assert.ok(start >= 0 && end > start, 'capture-and-process method must be locatable');
+    const body = mainSrc.slice(start, end);
+    assert.match(body, /await PhoneMirrorService\.getInstance\(\)\.publishScreenshotFile\(screenshotPath\)/,
+      'capture-and-process original screenshot must be sent to the phone');
+  });
+
+  test('selective screenshots also broadcast the original file', () => {
+    const start = ipcSrc.indexOf("safeHandle('take-selective-screenshot'");
+    const end = ipcSrc.indexOf("safeHandle('get-screenshots'", start);
+    assert.ok(start >= 0 && end > start, 'selective screenshot handler must be locatable');
+    const body = ipcSrc.slice(start, end);
+    assert.match(body, /await PhoneMirrorService\.getInstance\(\)\.publishScreenshotFile\(screenshotPath\)/,
+      'selective screenshot original must be sent to the phone');
+  });
+});

@@ -1297,7 +1297,7 @@ try {
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
 import { PhoneMirrorService, shouldStartPhoneMirrorOnBoot } from "./services/PhoneMirrorService"
-import { shouldUsePhoneMirrorStealthMode } from "./services/phoneMirrorStealthMode"
+import { shouldKeepScreenshotHidden } from "./services/hiddenScreenshotPolicy"
 import { describePageCaptureFallback, describeDoubleCaptureFailure, PAGE_CAPTURE_FALLBACK_CHANNEL, PAGE_CAPTURE_STARTED_CHANNEL } from "./services/pageCaptureFallback"
 import { setVerboseLoggingFlag } from "./verboseLog"
 import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
@@ -1828,12 +1828,12 @@ export class AppState {
           // Adapted from public PR #113 — verify premium interaction
           this.toggleOverlayMousePassthrough();
         } else if (actionId === 'general:take-screenshot') {
-          if (this.shouldUsePhoneMirrorStealthMode()) {
-            await this.captureScreenshotForPhoneMirrorStealthMode();
+          if (this.shouldKeepScreenshotHidden()) {
+            await this.captureScreenshotForHiddenOverlay();
           } else {
             // Route to renderer via global-shortcut so the renderer handles the
             // normal screenshot through the IPC invoke path (request/response
-            // guarantee). The hidden Phone Mirror path above is deliberately
+            // guarantee). The hidden-overlay path above is deliberately
             // main-process-owned so its capture session can skip restoration.
             const mainWindow = this.getMainWindow();
             this.sendToWindow(mainWindow, 'global-shortcut', { action: 'takeScreenshot' });
@@ -7441,28 +7441,20 @@ export class AppState {
     )
   }
 
-  private shouldUsePhoneMirrorStealthMode(): boolean {
-    const phoneMirror = PhoneMirrorService.getInstance();
-    return shouldUsePhoneMirrorStealthMode({
+  private shouldKeepScreenshotHidden(): boolean {
+    return shouldKeepScreenshotHidden({
       windowMode: this.windowHelper.getCurrentWindowMode(),
       mainWindowVisible: this.windowHelper.isVisible(),
       overlayExpanded: this.windowHelper.isOverlayExpanded(),
-      phoneClients: phoneMirror.hasClients() ? 1 : 0,
     });
   }
 
-  private async captureScreenshotForPhoneMirrorStealthMode(): Promise<void> {
+  private async captureScreenshotForHiddenOverlay(): Promise<void> {
     const screenshotPath = await this.takeScreenshot(false, {
       preserveMainWindowVisibility: true,
     });
     const preview = await this.getImagePreview(screenshotPath);
-    const phonePreview = await this.getImagePreview(screenshotPath, {
-      maxWidth: 1920,
-      maxHeight: 1080,
-      quality: 80,
-    });
-
-    PhoneMirrorService.getInstance().publishScreenshot(phonePreview);
+    await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath);
     this.sendToWindow(this.getMainWindow(), 'screenshot-attached', {
       path: screenshotPath,
       preview,
@@ -7477,19 +7469,26 @@ export class AppState {
    * screenshot fallback share one path.
    */
   private async captureScreenAndProcess(): Promise<void> {
-    const screenshotPath = await this.takeScreenshot(false);
+    const keepHidden = this.shouldKeepScreenshotHidden();
+    const screenshotPath = await this.takeScreenshot(false, {
+      preserveMainWindowVisibility: keepHidden,
+    });
     const preview = await this.getImagePreview(screenshotPath);
-    // Ensure the window is visible so the user can see the response without stealing focus
-    this.showMainWindow(true);
-    // win.focus() can cause macOS to re-activate the app. Re-hide the dock
-    // if we are in undetectable mode.
-    if (process.platform === 'darwin' && this.isUndetectable) {
-      if (app.dock) app.dock.hide();  // app.dock is macOS-only (undefined elsewhere); darwin+isUndetectable gated at 6599
+    await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath);
+    if (!keepHidden) {
+      // An already visible overlay still shows the answer without stealing focus.
+      this.showMainWindow(true);
+      // win.focus() can cause macOS to re-activate the app. Re-hide the dock
+      // if we are in undetectable mode.
+      if (process.platform === 'darwin' && this.isUndetectable) {
+        if (app.dock) app.dock.hide();
+      }
     }
     const mainWindow = this.getMainWindow();
     this.sendToWindow(mainWindow, 'capture-and-process', {
       path: screenshotPath,
       preview,
+      reveal: !keepHidden,
     });
   }
 
@@ -7645,6 +7644,7 @@ export class AppState {
           try {
             const screenshotPath = await this.takeScreenshot()
             const preview = await this.getImagePreview(screenshotPath)
+            await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath)
             const mainWindow = this.getMainWindow()
             this.sendToWindow(mainWindow, 'screenshot-taken', {
               path: screenshotPath,

@@ -977,14 +977,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeScreenshot();
       const preview = await appState.getImagePreview(screenshotPath);
-      // Cmd+H uses this invoke path. Keep the normal desktop attachment flow,
-      // and mirror a sharper 1080p-class preview to any connected phone.
-      const phonePreview = await appState.getImagePreview(screenshotPath, {
-        maxWidth: 1920,
-        maxHeight: 1080,
-        quality: 80,
-      });
-      PhoneMirrorService.getInstance().publishScreenshot(phonePreview);
+      await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath);
       return { path: screenshotPath, preview };
     } catch (error) {
       // console.error("Error taking screenshot:", error)
@@ -996,6 +989,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeSelectiveScreenshot();
       const preview = await appState.getImagePreview(screenshotPath);
+      await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath);
       return { path: screenshotPath, preview };
     } catch (error) {
       // EC-04 fix: cast unknown error to Error before accessing .message
@@ -1255,6 +1249,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
         const senderId = event.sender.id;
         const myStreamId = ++_chatStreamId;
+        let phoneMirrorUserPublished = false;
         const priorStream = _chatStreamsBySender.get(senderId);
         if (priorStream) {
           try { priorStream.controller.abort(); } catch { /* noop */ }
@@ -1826,6 +1821,12 @@ export function initializeIpcHandlers(appState: AppState): void {
             // Bug 003: V3 owns this turn end to end, so if the skill block is not
             // appended here it is injected nowhere at all.
             const v3SystemPrompt = skillPromptBlock ? `${composed.system}\n\n## ACTIVE SKILL\n${skillPromptBlock}` : composed.system;
+            try {
+              PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), String(message || ''));
+              phoneMirrorUserPublished = true;
+            } catch (_) {
+              /* mirror only */
+            }
             const v3Stream = llmHelper.streamChatWithOutcome(
               composed.user,
               imagePaths,
@@ -1863,6 +1864,11 @@ export function initializeIpcHandlers(appState: AppState): void {
                 }
                 finalText += tok;
                 event.sender.send('gemini-stream-token', tok, { streamId: myStreamId });
+                try {
+                  PhoneMirrorService.getInstance().publishToken(String(myStreamId), tok);
+                } catch (_) {
+                  /* mirror only */
+                }
               }
             } catch (streamErr) {
               // Finalize the debug record with the partial answer, then let the
@@ -1926,6 +1932,15 @@ export function initializeIpcHandlers(appState: AppState): void {
               incomplete: v3Truncated,
               incompleteReason: v3Truncated ? v3Stream.outcome.reason : undefined,
             });
+            try {
+              if (v3Truncated) {
+                PhoneMirrorService.getInstance().publishError(String(myStreamId), 'Answer incomplete');
+              } else {
+                PhoneMirrorService.getInstance().publishDone(String(myStreamId), finalText, 'Chat');
+              }
+            } catch (_) {
+              /* mirror only */
+            }
             finishDebug(finalText, !v3Truncated, v3Truncated ? 'stream_truncated' : null);
 
             // ── Record the turn (V3 previously recorded NOTHING) ────────────
@@ -2029,10 +2044,6 @@ export function initializeIpcHandlers(appState: AppState): void {
                   im?.logUsage?.('chat', String(message || ''), finalText);
                 }
               } catch { /* session transcript only */ }
-              try {
-                PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), String(message || ''));
-                if (!v3Truncated) PhoneMirrorService.getInstance().publishAssistantMessage(String(myStreamId), finalText, 'Chat');
-              } catch { /* mirror only */ }
             }
 
             return null;
@@ -2109,10 +2120,13 @@ export function initializeIpcHandlers(appState: AppState): void {
               { text: message, speaker: 'user', timestamp: Date.now(), final: true, origin: 'manual_chat' },
               true,
             );
-            try {
-              PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), message);
-            } catch (_) {
-              /* noop */
+            if (!phoneMirrorUserPublished) {
+              try {
+                PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), message);
+                phoneMirrorUserPublished = true;
+              } catch (_) {
+                /* noop */
+              }
             }
             // Guard against a newer chat stream having taken over while we were computing
             // the canned reply — matches the protection the LLM path uses around its token
@@ -2189,10 +2203,13 @@ export function initializeIpcHandlers(appState: AppState): void {
         );
 
         // Mirror to phone (no-op if PhoneMirrorService isn't running).
-        try {
-          PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), message);
-        } catch (_) {
-          /* noop */
+        if (!phoneMirrorUserPublished) {
+          try {
+            PhoneMirrorService.getInstance().publishUserMessage(String(myStreamId), message);
+            phoneMirrorUserPublished = true;
+          } catch (_) {
+            /* noop */
+          }
         }
 
         let fullResponse = '';
@@ -7152,6 +7169,9 @@ export function initializeIpcHandlers(appState: AppState): void {
         if (terminalSent) return;
         terminalSent = true;
         sendDirectAssistEvent(event.sender, payload);
+        if (request.source === 'screenshot' && payload.type === 'error') {
+          PhoneMirrorService.getInstance().publishError(request.requestId, payload.error?.message || 'Answer failed');
+        }
       };
 
       try {
@@ -7173,6 +7193,9 @@ export function initializeIpcHandlers(appState: AppState): void {
             lastSequence = streamEvent.sequence;
             fullText += streamEvent.text;
             sendDirectAssistEvent(event.sender, streamEvent);
+            if (request.source === 'screenshot') {
+              PhoneMirrorService.getInstance().publishToken(request.requestId, streamEvent.text);
+            }
             continue;
           }
           if (streamEvent.type === 'provider_switch') {
@@ -7198,6 +7221,9 @@ export function initializeIpcHandlers(appState: AppState): void {
           lastSequence = Math.max(lastSequence, streamEvent.sequence);
           if (streamEvent.type === 'done') {
             sendTerminal({ ...streamEvent, fullText } as DirectAssistStreamEvent);
+            if (request.source === 'screenshot') {
+              PhoneMirrorService.getInstance().publishDone(request.requestId, fullText, 'What to Answer');
+            }
             // ── TRANSCRIBE THIS TURN'S SCREENSHOT, AFTER the answer ─────────
             // Direct Assist deliberately has no vision pre-pass: it is one
             // dispatch with nothing in front of it, and a 6-second
@@ -16334,12 +16360,12 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Stealth screenshot capture triggered from the phone UI.
   // Takes a screenshot on the PC (adding it to the screenshot queue so it can
-  // be used in the next AI prompt), then broadcasts an ack so the phone shows
-  // a confirmation toast.  The image is NOT sent to the phone — the phone is
-  // just a remote shutter; the screenshot stays on the desktop for AI use.
+  // be used in the next AI prompt), sends its original PNG to connected
+  // phones, then broadcasts an ack so the phone shows a confirmation toast.
   safeHandle('phone-mirror:push-screenshot', async (_, screenshotPath?: string) => {
     try {
       const imgPath = screenshotPath || (await appState.takeScreenshot(false));
+      await PhoneMirrorService.getInstance().publishScreenshotFile(imgPath);
       PhoneMirrorService.getInstance().publishAck(
         'screenshot',
         'Screenshot captured — queued for AI',
@@ -16730,11 +16756,12 @@ export function initializeIpcHandlers(appState: AppState): void {
         }
       }
     } else if (cmd.type === 'screenshot') {
-      // Stealth screenshot: capture on PC → add to screenshot queue → ack to phone.
-      // The image is NOT sent to the phone — it stays on the desktop for AI use.
-      // The phone simply acts as a remote shutter button.
+      // Stealth screenshot: capture on PC → add to screenshot queue → send the
+      // original PNG → ack to phone. The full-resolution source remains
+      // on the desktop for AI use.
       try {
-        await appState.takeScreenshot(false);
+        const screenshotPath = await appState.takeScreenshot(false);
+        await PhoneMirrorService.getInstance().publishScreenshotFile(screenshotPath);
         PhoneMirrorService.getInstance().publishAck(
           'screenshot',
           'Screenshot captured — queued for AI',
